@@ -14,6 +14,7 @@ public:
 	static Injector* Get();
 
 	// Inject library
+	void InjectLib(DWORD ProcID, const std::wstring& Path);
 	void InjectLib(DWORD ProcID, const std::string& Path);
 
 	// Get SeDebugPrivilege. Needed to inject properly.

@@ -1,9 +1,5 @@
 // Injector
 #include "Injector.h"
-#include "Seh.h"
-#include "StringWrap.h"
-#include "argh.h"
-#include "StringUtil.h"
 
 // Windows API
 #include <Windows.h>
@@ -16,18 +12,33 @@
 #include <string>
 #include <locale>
 
+struct wstr
+{
+	wchar_t *ws;
+	wstr(const char* s)
+	{
+		int len = mbstowcs(NULL, s, 0) + 1;
+		ws = (wchar_t *)malloc(len * sizeof(wchar_t));
+		mbstowcs(ws, s, len);
+	}
+
+	~wstr()
+	{
+		free(ws);
+		ws = nullptr;
+	}
+
+};
+
 DWORD LanuchProcess(LPTSTR exeFile, LPTSTR workPath)
 {
-
-	LPTSTR curDir = new TCHAR[MAX_PATH];
-	GetCurrentDirectory(MAX_PATH, curDir);
 
 	SetCurrentDirectory(workPath);
 
 	LPTSTR sConLin = new TCHAR[MAX_PATH];
-	strcpy(sConLin, exeFile);
+	wcscpy(sConLin, exeFile);
 
-	STARTUPINFO stStartUpInfo = { sizeof(STARTUPINFO) };	
+	STARTUPINFO stStartUpInfo = { sizeof(STARTUPINFO) };
 	ZeroMemory(&stStartUpInfo, sizeof(STARTUPINFO));
 	stStartUpInfo.cb = sizeof(STARTUPINFO);
 	stStartUpInfo.dwFlags = STARTF_USESHOWWINDOW;
@@ -62,61 +73,50 @@ DWORD LanuchProcess(LPTSTR exeFile, LPTSTR workPath)
 		std::cerr << "failed to create process" << std::endl;
 	}
 
-	SetCurrentDirectory(curDir);
 	return pProcessInfo.dwProcessId;
 
 }
 
 // Entry point
-int main(int, char* argv[])
+int main(int argc, char* argv[])
 {
-	try
-	{
+    try
+    {
+		LPTSTR curDir = new TCHAR[MAX_PATH];
+		GetCurrentDirectory(MAX_PATH, curDir);
 
-	 //HMODULE hmod =	LoadLibraryW(L"dllhook.dll");
+		wstr exeFile(argv[1]);
+		wstr workPath(argv[2]);
 
+		// Variable to store process ID
+		DWORD ProcID = LanuchProcess(exeFile.ws, workPath.ws);
 
-	// Needed to proxy SEH exceptions to C++ exceptions
-	SehGuard Guard;
-
-        // Variable to store process ID
-        DWORD ProcID = LanuchProcess("D:/Need for Speed Most Wanted/NFS13.exe", "D:/Need for Speed Most Wanted/");
-   
+		SetCurrentDirectory(curDir);
 
         // Get privileges required to perform the injection
         Injector::Get()->GetSeDebugPrivilege();
 
-        // Inject module
-        Injector::Get()->InjectLib(ProcID, "dllhook.dll");
-        // If we get to this point then no exceptions have been thrown so we
-        // assume success.
-        std::tcout << "Successfully injected module!" << std::endl;
+		std::wstring dllPath(curDir);
+		dllPath += L"/dllhook.dll";
 
+		//std::string dllPath(curDir);
+		Injector::Get()->InjectLib(ProcID, dllPath);
+		// If we get to this point then no exceptions have been thrown so we
+		// assume success.
+		std::cout << "Successfully injected module!" << std::endl;
+    
     }
     // Catch STL-based exceptions.
     catch (const std::exception& e)
     {
         std::string TempError(e.what());
-        std::tstring Error(TempError.begin(), TempError.end());
-        std::tcout << "General Error:" << std::endl
+        std::string Error(TempError.begin(), TempError.end());
+        std::cout << "General Error:" << std::endl
             << Error << std::endl;
     }
-    // Catch custom SEH-proxy exceptions.
-    // Currently only supports outputting error code.
-    // TODO: Convert to string and dump more verbose output.
-    catch (const SehException& e)
-    {
-        std::tcout << "SEH Error:" << std::endl
-            << e.GetCode() << std::endl;
-    }
-    // Catch any other unknown exceptions.
-    // TODO: Find a better way to handle this. Should never happen anyway, but
-    // you never know.
-    // Note: Could use SetUnhandledExceptionFilter but would potentially be 
-    // messy.
     catch (...)
     {
-        std::tcout << "Unknown error!" << std::endl;
+        std::cout << "Unknown error!" << std::endl;
     }
 
     // Return success

@@ -23,7 +23,7 @@ Injector* Injector::Get()
 }
 
 // Injects a module (fully qualified path) via process id
-void Injector::InjectLib(DWORD ProcID, const std::string& Path)
+void Injector::InjectLib(DWORD ProcID, const std::wstring& Path)
 {
 	// Get a handle for the target process.
 	EnsureCloseHandle Process(OpenProcess(
@@ -36,7 +36,7 @@ void Injector::InjectLib(DWORD ProcID, const std::string& Path)
 		throw std::runtime_error("Could not get handle to process.");
 
 	// Calculate the number of bytes needed for the DLL's pathname
-	size_t Size  = (Path.length() + 1) * sizeof(char);
+	size_t Size  = (Path.length() + 1) * sizeof(wchar_t);
 
 	// Allocate space in the remote process for the pathname
 	EnsureReleaseRegionEx LibFileRemote(VirtualAllocEx(Process, NULL, Size, MEM_COMMIT, PAGE_READWRITE),
@@ -54,7 +54,7 @@ void Injector::InjectLib(DWORD ProcID, const std::string& Path)
 	if (!hKernel32)
 		throw std::runtime_error("Could not get handle to Kernel32.");
 	PTHREAD_START_ROUTINE pfnThreadRtn = reinterpret_cast<PTHREAD_START_ROUTINE>
-		(GetProcAddress(hKernel32, TEXT("LoadLibraryA")));
+		(GetProcAddress(hKernel32, "LoadLibraryW"));
 	if (!pfnThreadRtn)
 		throw std::runtime_error("Could not get pointer to LoadLibraryW.");
 
@@ -75,8 +75,18 @@ void Injector::InjectLib(DWORD ProcID, const std::string& Path)
 	// Check LoadLibrary succeeded and returned a module base
 	if (!ExitCode) {
 		DWORD ExitErr = GetLastError();
-		throw std::runtime_error("Call to LoadLibrary in remote process failed.");
+		throw std::runtime_error("Call to LoadLibraryW in remote process failed.");
 	}
+}
+
+// MBCS version of InjectLib
+void Injector::InjectLib(DWORD ProcID, const std::string& Path)
+{
+	// Convert path to unicode
+	std::wstring UnicodePath(Path.begin(),Path.end());
+
+	// Call the Unicode version of the function to actually do the work.
+	InjectLib(ProcID, UnicodePath);
 }
 
 // Gives the current process the SeDebugPrivelige so we can get the 
