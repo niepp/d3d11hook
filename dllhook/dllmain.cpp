@@ -33,23 +33,6 @@ void CreateConsole()
 }
 
 
-void FindWindows(DWORD pid, std::vector<HWND>& wndList)
-{
-	wndList.clear();
-	std::pair<std::vector<HWND>&, DWORD> params = { wndList, pid };
-	// Enumerate the windows using a lambda to process each window
-	BOOL bResult = EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL
-	{
-		auto pParams = (std::pair<std::vector<HWND>&, DWORD>*)(lParam);
-		DWORD processId;
-		if (GetWindowThreadProcessId(hwnd, &processId) && processId == pParams->second)
-		{
-			pParams->first.push_back(hwnd);
-		}
-		return TRUE;
-	}, (LPARAM)&params);
-}
-
 BOOL APIENTRY DllMain( HMODULE hModule,
                        DWORD  ul_reason_for_call,
                        LPVOID lpReserved)
@@ -61,24 +44,6 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     case DLL_PROCESS_ATTACH:
 		{
 			LogUtils::Instance()->LogInfo("DLL_PROCESS_ATTACH");
-
-			/*
-			DWORD pid = GetCurrentProcessId();
-			std::vector<HWND> wndList;
-			FindWindows(pid, wndList);
-			if (wndList.size() > 0)
-			{
-				for (auto& hWnd : wndList)
-				{
-					wchar_t wndName[1024];
-					GetWindowText(hWnd, wndName, ARRAYSIZE(wndName));
-					std::string strWnd = narrow(std::wstring(wndName));
-					LogUtils::Instance()->LogInfo("EnumWindows! hWnd = %d, wndName = %s", hWnd, strWnd.c_str());
-				}
-			}
-			*/
-
-			LogUtils::Instance()->LogInfo("StartHookDX11!");
 			StartHookDX11();
 		}
 		break;

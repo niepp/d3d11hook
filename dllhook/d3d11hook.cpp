@@ -1,13 +1,157 @@
+#include "MinHook/include/MinHook.h"
+
 #include "common.h"
 #include "log.h"
+#include "utility.h"
 #include "d3d11hook.h"
-
-#include "MinHook/include/MinHook.h"
 
 #pragma comment(lib, "d3d11.lib")
 
 #define HookImpl(VTableItem, Fun)\
 	if (Hook_API(reinterpret_cast<LPVOID>(VTableItem), Fun##_CallBack, reinterpret_cast<LPVOID*>(&(Raw_##Fun))) != S_OK) { return S_FALSE; }
+
+enum DrawType
+{
+	Draw = 0,
+	DrawIndex,
+};
+
+struct DrawCallSpec
+{
+	DrawType draw_type;
+	int passidx;
+	size_t ib_count;
+	size_t vb_count;
+	size_t cb_count;
+	size_t world_offset;
+	size_t viewprojection_offset;
+	ConstantBufferParams curConstBuf;
+	int curPassIdx;
+
+	DrawCallSpec()
+	{
+		Reset();
+	}
+
+	void Reset()
+	{
+		curConstBuf.Reset();
+		curPassIdx = 0;
+	}
+
+};
+
+struct CameraDrawCall : DrawCallSpec
+{
+	CameraParams cameraParams;
+};
+
+struct CarDrawCall : DrawCallSpec
+{
+	CarParams carParams;
+};
+
+enum RecordState
+{
+	end,
+	begin,
+	recording,
+};
+
+struct CaptureContext
+{
+	RecordState record;
+	uint32_t frame;
+
+	CameraDrawCall camCapture;
+	CarDrawCall carCapture;
+
+	std::vector<FrameParams> frameParamsVec;
+
+	CaptureContext(const std::wstring &cfgPath)
+		: record(RecordState::end), frame(0)
+	{
+		ReadDrawcallFromCfg(cfgPath, L"camera", camCapture);
+		ReadDrawcallFromCfg(cfgPath, L"car", carCapture);
+	}
+
+	void Reset()
+	{
+		ChangeRecordState(RecordState::end);
+		frameParamsVec.clear();
+	}
+
+	bool IsRecording()
+	{
+		return record == RecordState::recording;
+	}
+
+	void ChangeRecordState(RecordState rs)
+	{
+		LogUtils::Instance()->LogInfo("[capture] record: %d -> %d! \n", record, rs);
+		record = rs;
+	}
+
+	void OnFrameEnd()
+	{
+		if (record == RecordState::recording)
+		{
+			FrameParams frameparams;
+			frameparams.timems = get_now_ms();
+			frameparams.cameraParams = camCapture.cameraParams;
+			frameparams.carParams = carCapture.carParams;
+			frameParamsVec.push_back(frameparams);
+		}
+		else if (record == RecordState::begin)
+		{
+			ChangeRecordState(RecordState::recording);
+		}
+
+		camCapture.Reset();
+		carCapture.Reset();
+		++frame;
+	}
+
+private:
+	void ReadDrawcallFromCfg(const std::wstring &cfgPath, const LPCWSTR &objName, DrawCallSpec &dc)
+	{
+		const LPCWSTR &strCfgPath = cfgPath.data();
+		dc.draw_type = (DrawType)GetPrivateProfileInt(objName, L"drawtype", 0, strCfgPath);
+		dc.passidx = GetPrivateProfileInt(objName, L"pass_idx", 0, strCfgPath);
+		dc.ib_count = GetPrivateProfileInt(objName, L"ib_count", 0, strCfgPath);
+		dc.vb_count = GetPrivateProfileInt(objName, L"vb_count", 0, strCfgPath);
+		dc.cb_count = GetPrivateProfileInt(objName, L"cb_count", 0, strCfgPath);
+		dc.world_offset = GetPrivateProfileInt(objName, L"world_offset", 0, strCfgPath);
+		dc.viewprojection_offset = GetPrivateProfileInt(objName, L"viewproj_offset", 0, strCfgPath);
+	}
+
+};
+
+std::wstring GetFullPath(const LPCWSTR &cfgFileName)
+{
+	WCHAR strPath[MAX_PATH + 1];
+	GetModuleFileName(NULL, strPath, MAX_PATH + 1);
+	std::wstring rawfilename(strPath);
+	
+	auto str_replace = [](std::wstring &str, wchar_t src, wchar_t dst) {
+		for (auto &c : str) {
+			if (c == src) {
+				c = dst;
+			}
+		}
+	};
+
+	str_replace(rawfilename, '\\', '/');
+	size_t pos = rawfilename.rfind('/');
+	std::wstring path = rawfilename.substr(0, pos + 1);
+	path += cfgFileName;
+	return path;
+}
+
+CaptureContext g_CaptureContext(GetFullPath(L"InjectConfig.ini"));
+
+bool g_enableWireFrame = false;
+ID3D11RasterizerState *g_rState = nullptr;
 
 funptr GetTable(LPVOID TableBase)
 {
@@ -33,7 +177,7 @@ DrawIndexedCallBack Raw_DrawIndexed = nullptr;
 
 DrawCallBack Raw_Draw = nullptr;
 
-IASetInputLayoutCallback Raw_IASetInputLayout = nullptr;
+IASetInputLayoutCallBack Raw_IASetInputLayout = nullptr;
 
 IASetVertexBuffersCallBack Raw_IASetVertexBuffers = nullptr;
 
@@ -43,17 +187,27 @@ DrawIndexedInstancedCallBack Raw_DrawIndexedInstanced = nullptr;
 
 DrawInstancedCallBack Raw_DrawInstanced = nullptr;
 
-VSSetShaderResourcesCallback Raw_VSSetShaderResources = nullptr;
+VSSetShaderResourcesCallBack Raw_VSSetShaderResources = nullptr;
 
-OMSetRenderTargetsCallback Raw_OMSetRenderTargets = nullptr;
+OMSetRenderTargetsCallBack Raw_OMSetRenderTargets = nullptr;
 
-DispatchCallback Raw_Dispatch = nullptr;
+DispatchCallBack Raw_Dispatch = nullptr;
+
+RSSetStateCallBack Raw_RSSetState = nullptr;
 
 VSSetConstantBuffers1CallBack Raw_VSSetConstantBuffers1 = nullptr;
 
 PSSetConstantBuffers1CallBack Raw_PSSetConstantBuffers1 = nullptr;
 
+VSSetConstantBuffersCallBack Raw_VSSetConstantBuffers = nullptr;
+
+PSSetConstantBuffersCallBack Raw_PSSetConstantBuffers = nullptr;
+
+UpdateSubresourceCallBack Raw_UpdateSubresource = nullptr;
+
 //////////////////////////////ID3D11Device//////////////////////////////////
+CreateBufferCallBack Raw_CreateBuffer = nullptr;
+
 CreateInputLayoutCallBack Raw_CreateInputLayout = nullptr;
 
 CreateVertexShaderCallBack Raw_CreateVertexShader = nullptr;
@@ -61,6 +215,24 @@ CreateVertexShaderCallBack Raw_CreateVertexShader = nullptr;
 CreatePixelShaderCallBack Raw_CreatePixelShader = nullptr;
 
 //////////////////////////////ID3D11DeviceContext//////////////////////////////////
+
+void EnableWireframe(ID3D11DeviceContext* context)
+{
+	ID3D11RasterizerState *rState;
+	context->RSGetState(&rState);
+	D3D11_RASTERIZER_DESC rDesc;
+	rState->GetDesc(&rDesc);
+	rDesc.FillMode = g_enableWireFrame ? D3D11_FILL_WIREFRAME : D3D11_FILL_SOLID;
+
+	if (g_rState == nullptr)
+	{
+		ID3D11Device *pD3d = nullptr;
+		context->GetDevice(&pD3d);
+		pD3d->CreateRasterizerState(&rDesc, &g_rState);
+	}
+	Raw_RSSetState(context, g_rState);
+}
+
 void __stdcall PSSetShaderResources_CallBack(ID3D11DeviceContext* context,
 	UINT StartSlot,
 	UINT NumViews,
@@ -87,6 +259,34 @@ void __stdcall VSSetShader_CallBack(ID3D11DeviceContext* context,
 	Raw_VSSetShader(context, pVertexShader, ppClassInstances, NumClassInstances);
 }
 
+
+void ReadCar(UINT IndexCount, CarDrawCall &carCap)
+{
+	ConstantBufferParams &carCB = carCap.curConstBuf;
+
+	if (IndexCount == carCap.ib_count)
+	{
+		if (carCap.curPassIdx++ == carCap.passidx)
+		{
+			if (carCB.datanum > 0)
+			{
+				LogUtils::Instance()->LogInfo("[drawcall]-----------frame: %d----------- car | IndexCount: %d, cbnum: %d"
+					, g_CaptureContext.frame, IndexCount, carCB.datanum);
+
+				float *pdata = (float*)(carCB.pdata + carCap.world_offset);
+				Matrix world;
+				for (int i = 0; i < 16; ++i)
+				{
+					world.v[i] = pdata[i];
+				}
+				// FetchPositionRotation(world.v, carCap.carParams.pos, carCap.carParams.euler);
+			}
+			carCB.Reset();
+		}
+	}
+
+}
+
 void __stdcall DrawIndexed_CallBack(ID3D11DeviceContext* context,
 	UINT IndexCount,
 	UINT StartIndexLocation,
@@ -98,6 +298,16 @@ void __stdcall DrawIndexed_CallBack(ID3D11DeviceContext* context,
 		LogUtils::Instance()->LogInfo("[context] DrawIndexed_CallBack IndexCount: %d", IndexCount);
 	});
 
+	if (IndexCount > 10)
+	{
+		EnableWireframe(context);
+	}
+
+	if (g_CaptureContext.IsRecording())
+	{
+		ReadCar(IndexCount, g_CaptureContext.carCapture);
+	}
+
 	Raw_DrawIndexed(context, IndexCount, StartIndexLocation, BaseVertexLocation);
 }
 
@@ -105,7 +315,6 @@ void __stdcall Draw_CallBack(ID3D11DeviceContext* context,
 	UINT VertexCount,
 	UINT StartVertexLocation)
 {
-
 	Raw_Draw(context, VertexCount, StartVertexLocation);
 }
 
@@ -177,6 +386,11 @@ void __stdcall Dispatch_CallBack(ID3D11DeviceContext* context,
 	Raw_Dispatch(context, ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ);
 }
 
+void __stdcall RSSetState_CallBack(ID3D11DeviceContext* context,
+	ID3D11RasterizerState *pRasterizerState)
+{
+	Raw_RSSetState(context, pRasterizerState);
+}
 
 void __stdcall VSSetConstantBuffers1_CallBack(ID3D11DeviceContext* context,
 	UINT StartSlot,
@@ -198,8 +412,72 @@ void __stdcall PSSetConstantBuffers1_CallBack(ID3D11DeviceContext* context,
 	Raw_PSSetConstantBuffers1(context, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants);
 }
 
+void __stdcall VSSetConstantBuffers_CallBack(ID3D11DeviceContext* context,
+	UINT StartSlot,
+	UINT NumBuffers,
+	ID3D11Buffer* const* ppConstantBuffers)
+{
+	Raw_VSSetConstantBuffers(context, StartSlot, NumBuffers, ppConstantBuffers);
+}
+
+void __stdcall PSSetConstantBuffers_CallBack(ID3D11DeviceContext* context,
+	UINT StartSlot,
+	UINT NumBuffers,
+	ID3D11Buffer* const* ppConstantBuffers)
+{
+	Raw_PSSetConstantBuffers(context, StartSlot, NumBuffers, ppConstantBuffers);
+}
+
+void HoldConstantBuffer(UINT byteWidth, const void *pSrcData, DrawCallSpec &dcCap)
+{
+	if (byteWidth == dcCap.cb_count)
+	{
+		auto &dcCB = dcCap.curConstBuf;
+		dcCB.datanum = byteWidth;
+		dcCB.pdata = (const unsigned char*)pSrcData;
+	}
+}
+
+void __stdcall UpdateSubresource_CallBack(ID3D11DeviceContext* context,
+	ID3D11Resource  *pDstResource,
+	UINT            DstSubresource,
+	const D3D11_BOX *pDstBox,
+	const void      *pSrcData,
+	UINT            SrcRowPitch,
+	UINT            SrcDepthPitch)
+{
+	if (g_CaptureContext.IsRecording())
+	{
+		ID3D11Buffer *pbuffer = nullptr;
+		HRESULT hr = pDstResource->QueryInterface(IID_ID3D11Buffer, (void **)&pbuffer);
+		if (hr == S_OK)
+		{
+			if (pbuffer != nullptr && pSrcData != nullptr)
+			{
+				D3D11_BUFFER_DESC desc;
+				pbuffer->GetDesc(&desc);
+
+				HoldConstantBuffer(desc.ByteWidth, pSrcData, g_CaptureContext.camCapture);
+				HoldConstantBuffer(desc.ByteWidth, pSrcData, g_CaptureContext.carCapture);
+
+			}
+		}
+	}
+
+	Raw_UpdateSubresource(context, pDstResource, DstSubresource, pDstBox, pSrcData, SrcRowPitch, SrcDepthPitch);
+
+}
+
 
 //////////////////////////////Device//////////////////////////////////
+HRESULT __stdcall CreateBuffer_CallBack(ID3D11Device* device,
+	const D3D11_BUFFER_DESC      *pDesc,
+	const D3D11_SUBRESOURCE_DATA *pInitialData,
+	ID3D11Buffer                 **ppBuffer)
+{
+	return Raw_CreateBuffer(device, pDesc, pInitialData, ppBuffer);
+}
+
 HRESULT __stdcall CreateInputLayout_CallBack(ID3D11Device* device,
 	const D3D11_INPUT_ELEMENT_DESC* pInputElementDescs,
 	UINT NumElements,
@@ -222,7 +500,6 @@ HRESULT __stdcall CreateVertexShader_CallBack(ID3D11Device* device,
 	ID3D11ClassLinkage* pClassLinkage,
 	ID3D11VertexShader** ppVertexShader)
 {
-
 	return Raw_CreateVertexShader(device, pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
 }
 
@@ -241,6 +518,7 @@ HRESULT __stdcall CreatePixelShader_CallBack(ID3D11Device* device,
 //////////////////////////////////////////////////////////////////////////
 HRESULT HookDevice(funptr pDeviceVTable)
 {
+	HookImpl(pDeviceVTable[3], CreateBuffer);
 	HookImpl(pDeviceVTable[11], CreateInputLayout);
 	HookImpl(pDeviceVTable[12], CreateVertexShader);
 	HookImpl(pDeviceVTable[15], CreatePixelShader);
@@ -250,7 +528,7 @@ HRESULT HookDevice(funptr pDeviceVTable)
 
 HRESULT HookContext(funptr pContextVTable)
 {
-
+	HookImpl(pContextVTable[7], VSSetConstantBuffers);
 	HookImpl(pContextVTable[8], PSSetShaderResources);
 	HookImpl(pContextVTable[9], PSSetShader);
 	HookImpl(pContextVTable[11], VSSetShader);
@@ -267,6 +545,12 @@ HRESULT HookContext(funptr pContextVTable)
 	HookImpl(pContextVTable[33], OMSetRenderTargets);
 
 	HookImpl(pContextVTable[41], Dispatch);
+
+	HookImpl(pContextVTable[43], RSSetState);
+	
+	HookImpl(pContextVTable[48], UpdateSubresource);
+	HookImpl(pContextVTable[66], PSSetConstantBuffers);
+
 	HookImpl(pContextVTable[119], VSSetConstantBuffers1);
 	HookImpl(pContextVTable[123], PSSetConstantBuffers1);
 
@@ -279,23 +563,57 @@ typedef HRESULT(__stdcall *D3D11PresentHook) (IDXGISwapChain* pSwapChain, UINT S
 D3D11PresentHook Raw_Present = nullptr;
 
 HHOOK gMsgHook = NULL;
+
+LRESULT OnKeyDown(int key)
+{
+	switch (key)
+	{
+	case VK_F1:
+		g_enableWireFrame = !g_enableWireFrame;
+		if (g_rState != nullptr)
+		{
+			g_rState->Release();
+			g_rState = nullptr;
+		}
+		LogUtils::Instance()->LogInfo("[hook!] enable WireFrame: %s\n", g_enableWireFrame ? "true" : "false");
+		break;
+	case VK_F12:
+		LogUtils::Instance()->LogInfo("[hook!] windows key F12 pressed\n");
+		if (g_CaptureContext.record == RecordState::end)
+		{
+			g_CaptureContext.ChangeRecordState(RecordState::begin);
+		}
+		else if (g_CaptureContext.record == RecordState::recording)
+		{
+			g_CaptureContext.Reset();
+		}
+		break;
+	default:
+		break;
+	}
+	return S_OK;
+}
+
 LRESULT CALLBACK MsgHookProc(int nCode, WPARAM wp, LPARAM lp)
 {
-	CWPSTRUCT cwp = *(CWPSTRUCT*)lp;
-	int msg = LOWORD(cwp.wParam);
-
+	MSG *pmsg = (MSG*)(lp);
+	int msg = LOWORD(pmsg->message);
 	switch (msg)
 	{
-		case 0x4d: // F1
-			LogUtils::Instance()->LogInfo("[hook!] windows key F1 pressed\n");
-			break;
 		case WM_KEYDOWN:
-		case WM_SYSKEYDOWN:
-			LogUtils::Instance()->LogInfo("[hook!] windows key pressed %d, %d, %d\n", nCode, cwp.lParam, lp);
-			break;
+		{
+			OnKeyDown(pmsg->wParam);
+		}
+		break;
 	}
 
-	return CallNextHookEx(gMsgHook, nCode, wp, lp);
+	if (nCode < 0)
+	{
+		return CallNextHookEx(gMsgHook, nCode, wp, lp);
+	}
+
+	return S_OK;
+
 }
 
 HRESULT __stdcall Present_CallBack(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
@@ -317,7 +635,8 @@ HRESULT __stdcall Present_CallBack(IDXGISwapChain* pSwapChain, UINT SyncInterval
 		LogUtils::Instance()->LogInfo("Present_CallBack: swapChain: %p, device: %p, context: %p", pSwapChain, device, context);
 
 	});
-
+	
+	g_CaptureContext.OnFrameEnd();
 
 	return Raw_Present(pSwapChain, SyncInterval, Flags);
 }
@@ -408,7 +727,9 @@ DWORD __stdcall InitializeHook()
 
 void StartHookDX11()
 {
-	CreateThread(nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(InitializeHook), nullptr, 0, nullptr);
+	DWORD lpThreadId = 0;
+	HANDLE tid = CreateThread(nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(InitializeHook), nullptr, 0, &lpThreadId);
+	LogUtils::Instance()->LogInfo("StartHookDX11! thread(%p), id = %u", tid, lpThreadId);
 }
 
 void ImplHookDX11_Shutdown()

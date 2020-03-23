@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 // Injector
 #include "Injector.h"
 
@@ -11,6 +13,8 @@
 #include <iostream>
 #include <string>
 #include <locale>
+
+
 
 struct wstr
 {
@@ -30,7 +34,7 @@ struct wstr
 
 };
 
-DWORD LanuchProcess(LPTSTR exeFile, LPTSTR workPath)
+PROCESS_INFORMATION LanuchProcess(LPTSTR exeFile, LPTSTR workPath)
 {
 
 	SetCurrentDirectory(workPath);
@@ -47,39 +51,52 @@ DWORD LanuchProcess(LPTSTR exeFile, LPTSTR workPath)
 	PROCESS_INFORMATION pProcessInfo;
 	ZeroMemory(&pProcessInfo, sizeof(PROCESS_INFORMATION));
 
-	//创建一个新进程  
+	SECURITY_ATTRIBUTES pSec;
+	SECURITY_ATTRIBUTES tSec;
+	ZeroMemory(&pSec, sizeof(SECURITY_ATTRIBUTES));
+	ZeroMemory(&tSec, sizeof(SECURITY_ATTRIBUTES));
+	pSec.nLength = sizeof(pSec);
+	tSec.nLength = sizeof(tSec);
+
+	//创建一个新进程
 	if (CreateProcess(
-		NULL,   //  指向一个NULL结尾的、用来指定可执行模块的宽字节字符串  
-		sConLin, // 命令行字符串  
-		NULL, //    指向一个SECURITY_ATTRIBUTES结构体，这个结构体决定是否返回的句柄可以被子进程继承。  
-		NULL, //    如果lpProcessAttributes参数为空（NULL），那么句柄不能被继承。<同上>  
-		false,//    指示新进程是否从调用进程处继承了句柄。   
-		0,  //  指定附加的、用来控制优先类和进程的创建的标  
-			//  CREATE_NEW_CONSOLE  新控制台打开子进程  
-			//  CREATE_SUSPENDED    子进程创建后挂起，直到调用ResumeThread函数  
-		NULL, //    指向一个新进程的环境块。如果此参数为空，新进程使用调用进程的环境  
+		NULL,    //  指向一个NULL结尾的、用来指定可执行模块的宽字节字符串  
+		sConLin, //  命令行字符串  
+		&pSec,   //    指向一个SECURITY_ATTRIBUTES结构体，这个结构体决定是否返回的句柄可以被子进程继承。  
+		&tSec,   //    如果lpProcessAttributes参数为空（NULL），那么句柄不能被继承。<同上>  
+		TRUE,    //    指示新进程是否从调用进程处继承了句柄。   
+		CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,  //  指定附加的、用来控制优先类和进程的创建的标
+			     //  CREATE_NEW_CONSOLE  新控制台打开子进程  
+			     //  CREATE_SUSPENDED    子进程创建后挂起，直到调用ResumeThread函数  
+		NULL,    //    指向一个新进程的环境块。如果此参数为空，新进程使用调用进程的环境  
 		workPath, //    指定子进程的工作路径  
 		&stStartUpInfo, // 决定新进程的主窗体如何显示的STARTUPINFO结构体  
-		&pProcessInfo  // 接收新进程的识别信息的PROCESS_INFORMATION结构体  
+		&pProcessInfo   // 接收新进程的识别信息的PROCESS_INFORMATION结构体  
 	))
 	{
 		std::cout << "create process success" << std::endl;
 
 		//下面两行关闭句柄，解除本进程和新进程的关系，不然有可能不小心调用TerminateProcess函数关掉子进程  
-		CloseHandle(pProcessInfo.hProcess);
-		CloseHandle(pProcessInfo.hThread);
+		//CloseHandle(pProcessInfo.hProcess);
+		//CloseHandle(pProcessInfo.hThread);
 	}
 	else {
 		std::cerr << "failed to create process" << std::endl;
 	}
 
-	return pProcessInfo.dwProcessId;
+	return pProcessInfo;
 
 }
 
 // Entry point
 int main(int argc, char* argv[])
 {
+	if (argc < 3)
+	{
+		std::cout << "arg error!" << std::endl;
+		return -1;
+	}
+
     try
     {
 		LPTSTR curDir = new TCHAR[MAX_PATH];
@@ -89,7 +106,7 @@ int main(int argc, char* argv[])
 		wstr workPath(argv[2]);
 
 		// Variable to store process ID
-		DWORD ProcID = LanuchProcess(exeFile.ws, workPath.ws);
+		PROCESS_INFORMATION pi = LanuchProcess(exeFile.ws, workPath.ws);
 
 		SetCurrentDirectory(curDir);
 
@@ -100,11 +117,15 @@ int main(int argc, char* argv[])
 		dllPath += L"/dllhook.dll";
 
 		//std::string dllPath(curDir);
-		Injector::Get()->InjectLib(ProcID, dllPath);
+		Injector::Get()->InjectLib(pi.dwProcessId, dllPath);
+
+		CloseHandle(pi.hProcess);
+		ResumeThread(pi.hThread);
+
 		// If we get to this point then no exceptions have been thrown so we
 		// assume success.
 		std::cout << "Successfully injected module!" << std::endl;
-    
+
     }
     // Catch STL-based exceptions.
     catch (const std::exception& e)

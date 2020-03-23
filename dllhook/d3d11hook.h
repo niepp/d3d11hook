@@ -239,7 +239,7 @@ typedef void(__stdcall* DrawCallBack)(ID3D11DeviceContext* context,
 	UINT VertexCount,
 	UINT StartVertexLocation);
 
-typedef void(__stdcall* IASetInputLayoutCallback)(ID3D11DeviceContext* context,
+typedef void(__stdcall* IASetInputLayoutCallBack)(ID3D11DeviceContext* context,
 	ID3D11InputLayout* pInputLayout);
 
 typedef void(__stdcall* IASetVertexBuffersCallBack)(ID3D11DeviceContext* context,
@@ -267,20 +267,23 @@ typedef void(__stdcall* DrawInstancedCallBack)(ID3D11DeviceContext* context,
 	UINT StartVertexLocation,
 	UINT StartInstanceLocation);
 
-typedef void(__stdcall* VSSetShaderResourcesCallback)(ID3D11DeviceContext* context,
+typedef void(__stdcall* VSSetShaderResourcesCallBack)(ID3D11DeviceContext* context,
 	UINT StartSlot,
 	UINT NumViews,
 	ID3D11ShaderResourceView* const* ppShaderResourceViews);
 
-typedef void(__stdcall* OMSetRenderTargetsCallback)(ID3D11DeviceContext* context,
+typedef void(__stdcall* OMSetRenderTargetsCallBack)(ID3D11DeviceContext* context,
 	UINT NumViews,
 	ID3D11RenderTargetView* const* ppRenderTargetViews,
 	ID3D11DepthStencilView* pDepthStencilView);
 
-typedef void(__stdcall* DispatchCallback)(ID3D11DeviceContext* context,
+typedef void(__stdcall* DispatchCallBack)(ID3D11DeviceContext* context,
 	UINT ThreadGroupCountX,
 	UINT ThreadGroupCountY,
 	UINT ThreadGroupCountZ);
+
+typedef void(__stdcall* RSSetStateCallBack)(ID3D11DeviceContext* context,
+	ID3D11RasterizerState *pRasterizerState);
 
 typedef void(__stdcall* VSSetConstantBuffers1CallBack)(ID3D11DeviceContext* context,
 	UINT StartSlot,
@@ -296,7 +299,33 @@ typedef void(__stdcall* PSSetConstantBuffers1CallBack)(ID3D11DeviceContext* cont
 	const UINT* pFirstConstant,
 	const UINT* pNumConstants);
 
+
+typedef void(__stdcall* VSSetConstantBuffersCallBack)(ID3D11DeviceContext* context,
+	UINT         StartSlot,
+	UINT         NumBuffers,
+	ID3D11Buffer * const *ppConstantBuffers);
+
+typedef void(__stdcall* PSSetConstantBuffersCallBack)(ID3D11DeviceContext* context,
+	UINT         StartSlot,
+	UINT         NumBuffers,
+	ID3D11Buffer * const *ppConstantBuffers);
+
+typedef void(__stdcall* UpdateSubresourceCallBack)(ID3D11DeviceContext* context,
+	ID3D11Resource  *pDstResource,
+	UINT            DstSubresource,
+	const D3D11_BOX *pDstBox,
+	const void      *pSrcData,
+	UINT            SrcRowPitch,
+	UINT            SrcDepthPitch);
+
+
 //////////////////////////////ID3D11Device//////////////////////////////////
+
+typedef HRESULT(__stdcall* CreateBufferCallBack)(ID3D11Device* device,
+	const D3D11_BUFFER_DESC      *pDesc,
+	const D3D11_SUBRESOURCE_DATA *pInitialData,
+	ID3D11Buffer                 **ppBuffer);
+
 typedef HRESULT(__stdcall* CreateInputLayoutCallBack)(ID3D11Device* device,
 	const D3D11_INPUT_ELEMENT_DESC* pInputElementDescs,
 	UINT NumElements,

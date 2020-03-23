@@ -6,6 +6,8 @@
 
 // C++ Standard Library
 #include <vector>
+#include <iostream>
+#include <string>
 
 // StealthLib
 #include "Injector.h"
@@ -22,6 +24,104 @@ Injector* Injector::Get()
 	return m_pSingleton;
 }
 
+uintptr_t FindRemoteDLL(DWORD pid, const std::wstring libName)
+{
+	HANDLE hModuleSnap = INVALID_HANDLE_VALUE;
+
+	// up to 10 retries
+	for (int i = 0; i < 10; i++)
+	{
+		hModuleSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
+		if (hModuleSnap == INVALID_HANDLE_VALUE)
+		{
+			DWORD err = GetLastError();
+			std::cout << "CreateToolhelp32Snapshot(" << pid << ") -> " << err << std::endl;
+
+			// retry if error is ERROR_BAD_LENGTH
+			if (err == ERROR_BAD_LENGTH)
+				continue;
+		}
+
+		// didn't retry, or succeeded
+		break;
+	}
+
+	if (hModuleSnap == INVALID_HANDLE_VALUE)
+	{
+		std::cout << "Couldn't create toolhelp dump of modules in process " << pid << std::endl;
+		return 0;
+	}
+
+	MODULEENTRY32 me32;
+	memset(&me32, 0, sizeof(me32));
+	me32.dwSize = sizeof(MODULEENTRY32);
+
+	BOOL success = Module32First(hModuleSnap, &me32);
+
+	if (success == FALSE)
+	{
+		DWORD err = GetLastError();
+
+		std::cout << "Couldn't get first module in process " << pid << "err: " << err << std::endl;
+		CloseHandle(hModuleSnap);
+		return 0;
+	}
+
+	uintptr_t ret = 0;
+
+	int numModules = 0;
+
+	do
+	{
+		wchar_t modnameLower[MAX_MODULE_NAME32 + 1];
+		memset(&modnameLower, 0, sizeof(modnameLower));
+		wcsncpy_s(modnameLower, me32.szModule, MAX_MODULE_NAME32);
+
+		wchar_t *wc = &modnameLower[0];
+		while (*wc)
+		{
+			*wc = towlower(*wc);
+			wc++;
+		}
+
+		numModules++;
+
+		if (wcsstr(modnameLower, libName.c_str()) == modnameLower)
+		{
+			ret = (uintptr_t)me32.modBaseAddr;
+		}
+	} while (ret == 0 && Module32Next(hModuleSnap, &me32));
+
+	if (ret == 0)
+	{
+		HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
+
+		DWORD exitCode = 0;
+
+		if (h)
+			GetExitCodeProcess(h, &exitCode);
+
+		if (h == NULL || exitCode != STILL_ACTIVE)
+		{
+			std::cout <<
+				"Error injecting into remote process with PID " << pid << "which is no longer available.\n"
+				"Possibly the process has crashed during early startup, or is missing DLLs to run?" << std::endl;
+		}
+		else
+		{
+			std::cout << "Couldn't find module \'" << libName.data() << "\' among " << numModules << " modules" << std::endl;
+		}
+
+		if (h)
+			CloseHandle(h);
+	}
+
+	CloseHandle(hModuleSnap);
+
+	return ret;
+}
+
+
 // Injects a module (fully qualified path) via process id
 void Injector::InjectLib(DWORD ProcID, const std::wstring& Path)
 {
@@ -30,7 +130,9 @@ void Injector::InjectLib(DWORD ProcID, const std::wstring& Path)
 		PROCESS_QUERY_INFORMATION |   // Required by Alpha
 		PROCESS_CREATE_THREAD     |   // For CreateRemoteThread
 		PROCESS_VM_OPERATION      |   // For VirtualAllocEx/VirtualFreeEx
-		PROCESS_VM_WRITE,             // For WriteProcessMemory
+		PROCESS_VM_WRITE          |   // For WriteProcessMemory
+		PROCESS_VM_READ			  |
+		SYNCHRONIZE,
 		FALSE, ProcID));
 	if (!Process) 
 		throw std::runtime_error("Could not get handle to process.");
@@ -59,24 +161,21 @@ void Injector::InjectLib(DWORD ProcID, const std::wstring& Path)
 		throw std::runtime_error("Could not get pointer to LoadLibraryW.");
 
 	// Create a remote thread that calls LoadLibraryW(DLLPathname)
-	EnsureCloseHandle Thread(CreateRemoteThread(Process, NULL, 0, pfnThreadRtn, 
-		LibFileRemote, 0, NULL));
+	HANDLE Thread = CreateRemoteThread(Process, NULL, 0, pfnThreadRtn,
+		LibFileRemote, 0, NULL);
 	if (!Thread)
 		throw std::runtime_error("Could not create thread in remote process.");
 
 	// Wait for the remote thread to terminate
-	DWORD WaitRet = WaitForSingleObject(Thread, INFINITE);
+	WaitForSingleObject(Thread, INFINITE);
+	CloseHandle(Thread);
 
-	// Get thread exit code
-	DWORD ExitCode;
-	if (!GetExitCodeThread(Thread, &ExitCode))
-		throw std::runtime_error("Could not get thread exit code.");
-
-	// Check LoadLibrary succeeded and returned a module base
-	if (!ExitCode) {
-		DWORD ExitErr = GetLastError();
-		throw std::runtime_error("Call to LoadLibraryW in remote process failed.");
+	auto func = FindRemoteDLL(ProcID, L"dllhook.dll");
+	if (func == 0)
+	{
+		throw std::runtime_error("cannot find remotedll.");
 	}
+
 }
 
 // MBCS version of InjectLib

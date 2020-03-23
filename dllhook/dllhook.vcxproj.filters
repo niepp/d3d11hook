@@ -2,7 +2,6 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClCompile Include="d3d11hook.cpp" />
-    <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="log.cpp" />
     <ClCompile Include="minhook\src\buffer.c">
       <Filter>minhook</Filter>
@@ -19,6 +18,7 @@
     <ClCompile Include="minhook\src\trampoline.c">
       <Filter>minhook</Filter>
     </ClCompile>
+    <ClCompile Include="dllmain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="common.h" />
@@ -48,6 +48,7 @@
     <ClInclude Include="minhook\src\trampoline.h">
       <Filter>minhook</Filter>
     </ClInclude>
+    <ClInclude Include="utility.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="minhook">
